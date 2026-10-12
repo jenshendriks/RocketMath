@@ -16,9 +16,8 @@ the generated graph stays small and fast.
 3. In a Geometry Nodes or Shader editor: **Shift+A → Rocket Science → Formula**
    (or the **Add Formula Node** button in the sidebar's *Rocket Math* tab).
 
-In **Geometry Nodes**, type your formula directly in the **Formula** field on
-the node body. (In the Shader editor the field lives in the sidebar's *Rocket
-Math* tab instead.) The network rebuilds as you edit.
+Type your formula directly in the **Formula** field on the node body, in both
+Geometry Nodes and the Shader editor. The network rebuilds as you edit.
 
 ## Inputs
 
