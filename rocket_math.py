@@ -825,8 +825,10 @@ if bpy is not None:
         if is_geo:
             fsock = node.inputs.get("Formula")
             formula = fsock.default_value if fsock is not None else grp.rocket_formula
+        elif node.bl_idname == ROCKET_ShaderNode.bl_idname:
+            formula = node.formula
         else:
-            formula = grp.rocket_formula
+            formula = grp.rocket_formula   # legacy plain shader group node
 
         changed_co = (count != grp.rocket_input_count
                       or enc != grp.rocket_type_overrides)
@@ -866,6 +868,46 @@ if bpy is not None:
         except Exception:
             pass  # never destabilise the depsgraph from a handler
 
+    def _shader_formula_update(self, context):
+        if self.node_tree is not None:
+            _sync_node(self, self.node_tree)
+
+    class ROCKET_ShaderNode(bpy.types.ShaderNodeCustomGroup):
+        """Shader node groups cannot have String sockets, so the shader version
+        of the formula node is a Python group node that draws its own text
+        field and owns a hidden node group holding the generated network."""
+        bl_idname = "RocketMathShaderNode"
+        bl_label = "Formula"
+        bl_icon = "DRIVER"
+
+        formula: bpy.props.StringProperty(
+            name="Formula", default="", update=_shader_formula_update)
+
+        @classmethod
+        def poll(cls, ntree):
+            return ntree.bl_idname == "ShaderNodeTree"
+
+        def init(self, context):
+            grp = bpy.data.node_groups.new(".RocketMath", "ShaderNodeTree")
+            grp.rocket_is_formula = True
+            self.node_tree = grp
+            build_tree(grp)
+            self.width = 200.0
+
+        def copy(self, node):
+            # Each formula node owns its own group, so duplicates stay independent.
+            if node.node_tree is not None:
+                self.node_tree = node.node_tree.copy()
+
+        def draw_buttons(self, context, layout):
+            layout.prop(self, "formula", text="", icon="DRIVER")
+            grp = self.node_tree
+            if grp is not None and grp.rocket_error:
+                layout.label(text=grp.rocket_error, icon="ERROR")
+
+        def draw_buttons_ext(self, context, layout):
+            layout.prop(self, "formula", text="Formula")
+
     class ROCKET_OT_add_formula(bpy.types.Operator):
         bl_idname = "node.rocket_add_formula"
         bl_label = "Add Formula Node"
@@ -899,18 +941,20 @@ if bpy is not None:
         def execute(self, context):
             sp = context.space_data
             tree = sp.edit_tree
-            group_node = "GeometryNodeGroup" if tree.bl_idname == "GeometryNodeTree" \
-                else "ShaderNodeGroup"
+            is_geo = tree.bl_idname == "GeometryNodeTree"
+            group_node = "GeometryNodeGroup" if is_geo else ROCKET_ShaderNode.bl_idname
             try:
                 node = tree.nodes.new(group_node)
             except RuntimeError as e:
                 self.report({"ERROR"}, str(e))
                 return {"CANCELLED"}
 
-            grp = bpy.data.node_groups.new("RocketMath", tree.bl_idname)
-            grp.rocket_is_formula = True
-            node.node_tree = grp
-            build_tree(grp)  # create the Formula field + first input + output
+            if is_geo:
+                grp = bpy.data.node_groups.new("RocketMath", tree.bl_idname)
+                grp.rocket_is_formula = True
+                node.node_tree = grp
+                build_tree(grp)  # create the Formula field + first input + output
+            # the shader node builds its own group in init()
             for n in tree.nodes:
                 n.select = False
             node.select = True
@@ -956,6 +1000,8 @@ if bpy is not None:
                 fsock = node.inputs.get("Formula")
                 if fsock is not None:
                     box.prop(fsock, "default_value", text="Formula")
+                elif node.bl_idname == ROCKET_ShaderNode.bl_idname:
+                    box.prop(node, "formula", text="Formula")
                 else:
                     box.prop(grp, "rocket_formula", text="Formula")
                 box.operator("node.rocket_rebuild", icon="FILE_REFRESH")
@@ -991,6 +1037,7 @@ if bpy is not None:
             self.layout.menu("ROCKET_MT_add", icon="DRIVER")
 
     _classes = (
+        ROCKET_ShaderNode,
         ROCKET_OT_add_formula,
         ROCKET_OT_rebuild,
         ROCKET_MT_add,
