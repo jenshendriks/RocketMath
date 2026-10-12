@@ -847,9 +847,12 @@ if bpy is not None:
 
     def _sync_all():
         trees = list(bpy.data.node_groups)
-        for mat in bpy.data.materials:
-            if getattr(mat, "use_nodes", False) and mat.node_tree:
-                trees.append(mat.node_tree)
+        # Shader trees embedded in materials, worlds and lights. Blender 5.x
+        # deprecates `use_nodes` (always on), so just check for a tree.
+        for coll in (bpy.data.materials, bpy.data.worlds, bpy.data.lights):
+            for idb in coll:
+                if getattr(idb, "node_tree", None) is not None:
+                    trees.append(idb.node_tree)
         for tree in trees:
             for node in tree.nodes:
                 grp = getattr(node, "node_tree", None)
@@ -872,24 +875,47 @@ if bpy is not None:
         @classmethod
         def poll(cls, context):
             sp = context.space_data
-            return (sp and sp.type == "NODE_EDITOR" and sp.edit_tree is not None
-                    and sp.edit_tree.bl_idname in {"GeometryNodeTree", "ShaderNodeTree"})
+            return bool(sp and sp.type == "NODE_EDITOR" and sp.edit_tree is not None
+                        and sp.edit_tree.is_editable
+                        and sp.edit_tree.bl_idname in {"GeometryNodeTree", "ShaderNodeTree"})
+
+        def invoke(self, context, event):
+            # Like Blender's own Add menu: drop the node under the mouse and
+            # let the user move it. Without this the node landed at the tree
+            # origin, which in a material is usually hidden behind the
+            # Principled BSDF or out of view, so adding looked like a no-op.
+            sp = context.space_data
+            if context.region and context.region.type == "WINDOW":
+                sp.cursor_location_from_region(event.mouse_region_x,
+                                               event.mouse_region_y)
+            else:
+                sp.cursor_location = sp.edit_tree.view_center
+            result = self.execute(context)
+            if "FINISHED" in result and context.region \
+                    and context.region.type == "WINDOW":
+                bpy.ops.node.translate_attach_remove_on_cancel("INVOKE_DEFAULT")
+            return result
 
         def execute(self, context):
-            tree = context.space_data.edit_tree
-            grp = bpy.data.node_groups.new("RocketMath", tree.bl_idname)
-            grp.rocket_is_formula = True
-
+            sp = context.space_data
+            tree = sp.edit_tree
             group_node = "GeometryNodeGroup" if tree.bl_idname == "GeometryNodeTree" \
                 else "ShaderNodeGroup"
-            node = tree.nodes.new(group_node)
+            try:
+                node = tree.nodes.new(group_node)
+            except RuntimeError as e:
+                self.report({"ERROR"}, str(e))
+                return {"CANCELLED"}
+
+            grp = bpy.data.node_groups.new("RocketMath", tree.bl_idname)
+            grp.rocket_is_formula = True
             node.node_tree = grp
             build_tree(grp)  # create the Formula field + first input + output
-            node.location = (0.0, 0.0)
             for n in tree.nodes:
                 n.select = False
             node.select = True
             tree.nodes.active = node
+            node.location = sp.cursor_location
             return {"FINISHED"}
 
     class ROCKET_OT_rebuild(bpy.types.Operator):
@@ -955,6 +981,7 @@ if bpy is not None:
         bl_label = "Rocket Science"
 
         def draw(self, context):
+            self.layout.operator_context = "INVOKE_REGION_WIN"
             self.layout.operator("node.rocket_add_formula",
                                  text="Formula", icon="DRIVER")
 
